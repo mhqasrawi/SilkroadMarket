@@ -56,6 +56,7 @@ def postStallData(packetBytes, isFirstItem):
         if response.status == 200 or response.status == 201:
             log("Item added successfully")
         else:
+            log("error")
             log(
                 f"API Response: {data.decode('utf-8')} for Packet {packetBytes.hex()} and invItems: {invItems}"
             )
