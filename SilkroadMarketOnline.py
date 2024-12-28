@@ -1,15 +1,20 @@
 import datetime
 import json
 import http.client
-import struct
-import time
-from phBot import *
 import threading
+from phBot import *
 
 pName = "SilkroadMarketOnline"
-pVersion = "1.0.0"
+pVersion = "1.0.1"
+
+# Globals
+lock = threading.Lock()
+previous_packet = None
+currentIndex = 0
+last_stall_reset_time = None  # Timestamp for debounce
 
 
+# Character and Inventory Data
 def getInventory():
     items = get_inventory()["items"]
     filtered_items = [item for item in items if item is not None]
@@ -26,15 +31,34 @@ region = int(charData["region"])
 
 API_KEY = "PLACE YOUR API KEY HERE"
 
-previous_packet = ""
-currentIndex = 0
+
+# Safe Update for Previous Packet
+def safe_update_previous_packet(packet):
+    """Thread-safe update for the previous_packet variable."""
+    global previous_packet
+    try:
+        if lock.acquire(timeout=1):  # Wait up to 1 second for the lock
+            log("Lock acquired. Updating previous_packet.")
+            previous_packet = packet
+        else:
+            log(
+                "Failed to acquire lock for updating previous_packet. Possible contention."
+            )
+    finally:
+        if lock.locked():
+            lock.release()
+            log("Lock released after updating previous_packet.")
 
 
-def postStallData(packetBytes, isFirstItem):
-    conn = http.client.HTTPSConnection("silkroadmarket.online")
+# API Call to Post Stall Data
+def postStallData(packetData, isFirstItem):
+    """
+    Sends the raw packet bytes to the API along with metadata.
+    """
+    # Prepare payload
     payload = json.dumps(
         {
-            "bytes": packetBytes.hex(),
+            "bytes": packetData.hex(),  # Use the raw packet data, converted to hex
             "charName": charName,
             "isFirstItem": isFirstItem,
             "items": invItems,
@@ -49,70 +73,80 @@ def postStallData(packetBytes, isFirstItem):
         "Content-Type": "application/json",
         "X-API-KEY": API_KEY,
     }
+
+    # Send the payload to the API
     try:
+        conn = http.client.HTTPSConnection("silkroadmarket.online")
         conn.request("POST", "/api/v1/stall", payload, headers)
         response = conn.getresponse()
         data = response.read()
-        if response.status == 200 or response.status == 201:
-            log("Item added successfully")
-        else:
-            log("error")
-            log(
-                f"API Response: {data.decode('utf-8')} for Packet {packetBytes.hex()} and invItems: {invItems}"
-            )
-    except Exception as e:
-        log(f"API Error: {e}")
-    finally:
         conn.close()
-        return True
+
+        if response.status in (200, 201):
+            log(f"API Success: {response.status}")
+        else:
+            log(f"API Error: {response.status} - {data.decode('utf-8')}")
+    except Exception as e:
+        log(f"API Exception: {e}")
 
 
+# Handle Joymax Packets
 def handle_joymax(opcode, data):
-    global previous_packet, currentIndex
-    current_time = datetime.datetime.now().strftime("%H:%M:%S")
-
-    if opcode == 0xB0BA and data != None and tuple(data) == (0x01, 0x05, 0x01):
-        currentIndex = 0
-        log("Stall Has Been Opened Resetting Current Index")
-
+    global currentIndex, previous_packet
     if data is None:
         return True
 
     if opcode != 0xB0BA:
         return True
 
-    packetBytes = "None" if not data else " ".join("{:02X}".format(x) for x in data)
-    packet_tuple = tuple(data)
+    # Convert data to hex string for logging
+    packetBytes = " ".join(f"{x:02X}" for x in data)
 
-    if (
-        opcode == 0xB0BA
-        and packet_tuple != (0x01, 0x05, 0x01)
-        and packet_tuple != (0x02, 0x13, 0x3C)
-    ):
-        current_packet = packetBytes.rstrip(" FF")
+    log(f"Packet Received (Opcode {opcode:04X}): {packetBytes}")
 
-        if previous_packet:
-            new_packet = current_packet.replace(previous_packet, "").strip()
-        else:
-            new_packet = current_packet
+    # Ensure we're not processing irrelevant packets
+    if tuple(data) not in [(0x01, 0x05, 0x01), (0x02, 0x13, 0x3C)]:
+        try:
+            # Safely update the previous packet
+            safe_update_previous_packet(packetBytes)
 
-        previous_packet = current_packet
+            # If no previous packet exists, treat the current one as is
+            if previous_packet is None:
+                log("Uploading first item.")
+                postStallData(data, isFirstItem=True)
+            else:
+                # Use the entire packet if no meaningful previous packet exists
+                log("Uploading non-first item.")
+                postStallData(data, isFirstItem=False)
 
-        if currentIndex == 0:
-            log("Uploading First Item")
-            firstItemPacket = bytes.fromhex(new_packet + " FF")
-
-            postStallData(firstItemPacket, True)
-
-        else:
-            log("Uploading Non First Item")
-            nonFirstItemPacket = bytes.fromhex(new_packet + " FF")
-
-            return postStallData(nonFirstItemPacket, False)
-
-        currentIndex += 1
+            currentIndex += 1
+        except Exception as e:
+            log(f"Error in handle_joymax: {e}")
 
     return True
 
+
+# Reset Index on Stall Open (Debounced)
+def reset_current_index():
+    global currentIndex, last_stall_reset_time
+    now = datetime.datetime.now()
+
+    # Debounce logic: only reset if at least 1 second has passed since the last reset
+    if (
+        last_stall_reset_time is None
+        or (now - last_stall_reset_time).total_seconds() > 1
+    ):
+        log("Stall has been opened. Resetting current index.")
+        currentIndex = 0
+        last_stall_reset_time = now
+
+
+# # Main Entry Point
+# def event_loop():
+#     """Event loop to handle Joymax packets."""
+#     global currentIndex
+
+#     # Simulate resetting index when a stall is opened
+#     reset_current_index()
 
 log("Plugin: " + pName + " v" + pVersion + " successfully loaded")
