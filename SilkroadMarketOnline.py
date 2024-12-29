@@ -5,7 +5,7 @@ import threading
 from phBot import *
 
 pName = "SilkroadMarketOnline"
-pVersion = "1.0.1"
+pVersion = "1.0.2"
 
 # Globals
 lock = threading.Lock()
@@ -32,13 +32,12 @@ region = int(charData["region"])
 API_KEY = "PLACE YOUR API KEY HERE"
 
 
-# Safe Update for Previous Packet
 def safe_update_previous_packet(packet):
     """Thread-safe update for the previous_packet variable."""
     global previous_packet
     try:
-        if lock.acquire(timeout=1):  # Wait up to 1 second for the lock
-            log("Lock acquired. Updating previous_packet.")
+        if lock.acquire(timeout=1):
+            # log("Lock acquired. Updating previous_packet.")
             previous_packet = packet
         else:
             log(
@@ -102,7 +101,7 @@ def handle_joymax(opcode, data):
     # Convert data to hex string for logging
     packetBytes = " ".join(f"{x:02X}" for x in data)
 
-    log(f"Packet Received (Opcode {opcode:04X}): {packetBytes}")
+    # log(f"Packet Received (Opcode {opcode:04X}): {packetBytes}")
 
     # Ensure we're not processing irrelevant packets
     if tuple(data) not in [(0x01, 0x05, 0x01), (0x02, 0x13, 0x3C)]:
@@ -140,13 +139,5 @@ def reset_current_index():
         currentIndex = 0
         last_stall_reset_time = now
 
-
-# # Main Entry Point
-# def event_loop():
-#     """Event loop to handle Joymax packets."""
-#     global currentIndex
-
-#     # Simulate resetting index when a stall is opened
-#     reset_current_index()
 
 log("Plugin: " + pName + " v" + pVersion + " successfully loaded")
